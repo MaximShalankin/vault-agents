@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# vault-agents runtime (машино-зависимое, создаёт `vault-agents init`)
+.mcp.json
+vault/.index/
+vault/.kg/

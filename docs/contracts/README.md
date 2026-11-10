@@ -17,6 +17,26 @@
 Режимы: `--new` — строгие гейты (создание тикета), без флага — мягкий
 legacy (правка существующего).
 
+## Статусы тикетов
+
+Enum: `OPEN`, `IN_PROGRESS`, `DONE`, `DEFERRED`, `CANCELLED`.
+
+Legacy-синонимы — часть контракта; `vault-agents spec tickets` отдаёт их в
+`legacy.status_synonyms`:
+
+| Канон | Синонимы |
+|---|---|
+| `OPEN` | open, открыт, todo, planned, draft, concept, запланировано, готов к реализации, спроектирован |
+| `IN_PROGRESS` | in_progress, in progress, in-progress, wip, active, review, в работе |
+| `DONE` | done, closed, resolved, completed, answered, завершён, выполнен, выполнено, подтверждено, решено, опубликован, опубликовано, готов |
+| `DEFERRED` | deferred, отложен, parked |
+| `CANCELLED` | cancelled, отменён, superseded |
+
+Парсинг: берётся первый токен после `**Status:**`; `**Status:** open — ждёт
+ревью` нормализуется в `OPEN`, остаток — допустимый комментарий. При
+создании (`--new`) допустим только enum-токен; при правке неизвестное
+значение — warning, не deny.
+
 ## Решения
 
 1. Статус тикета — жирная строка `**Status:**` в шапке (не фронтматтер).

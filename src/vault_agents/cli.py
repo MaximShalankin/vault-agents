@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -34,6 +36,20 @@ MIN_SCHEMA = """{
 
 def _project(args) -> Path:
     return config_mod.find_project(getattr(args, "project", None))
+
+
+def _init_project(args) -> Path:
+    """Корень для init: явный --project/VAULT_PROJECT или найденный проект;
+    пустой cwd — тоже валидный корень (init создаёт скелет с нуля)."""
+    explicit = getattr(args, "project", None) or os.environ.get("VAULT_PROJECT")
+    if explicit:
+        root = Path(explicit).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+    try:
+        return config_mod.find_project(None)
+    except config_mod.VaultNotFound:
+        return Path.cwd().resolve()
 
 
 # ---------------------------------------------------------------- init ----
@@ -89,7 +105,7 @@ def _ensure_gitignore(project: Path) -> bool:
 
 
 def cmd_init(args) -> int:
-    project = _project(args)
+    project = _init_project(args)
     project.mkdir(parents=True, exist_ok=True)
     created = _ensure_skeleton(project)
     cfg_path = config_mod.write_default_config(project)
@@ -352,14 +368,79 @@ def cmd_check(args) -> int:
 
 # ---------------------------------------------------------------- spec ----
 
-def cmd_spec(args) -> int:
-    """Спецификация контракта для потребителей (внешняя канбан-доска): enum,
-    синонимы, шаблоны имён — из единственного источника, без угадывания путей."""
-    from . import contracts
+def _json_hash(raw) -> str:
+    canonical = json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
-    print(json.dumps(contracts.load_spec(
-        "tickets-v1.json" if args.which == "tickets" else "inbox-proto-1.json"
-    ), ensure_ascii=False, indent=2))
+
+def _schema_spec(project_arg: str | None) -> dict:
+    """Машинная схема проекта + встроенный default для bootstrap'ов.
+
+    `matches_default` сравнивает канонические SHA-256: по нему видно, что
+    проект живёт на шаблоне vault-agents, а не на своей v2-схеме.
+    """
+    default_raw = json.loads(MIN_SCHEMA)
+    default_hash = _json_hash(default_raw)
+    explicit = project_arg or os.environ.get("VAULT_PROJECT")
+    if explicit:
+        project: Path | None = Path(explicit).expanduser().resolve()
+    else:
+        try:
+            project = config_mod.find_project(None)
+        except config_mod.VaultNotFound:
+            project = None
+
+    payload = {
+        "source": "default",
+        "project": str(project) if project else None,
+        "schema_path": None,
+        "schema_present": False,
+        "schema_version": None,
+        "schema_hash": None,
+        "schema": None,
+        "default_schema_version": default_raw.get("version"),
+        "default_schema_hash": default_hash,
+        "default_schema": default_raw,
+        "matches_default": False,
+    }
+    if project is None:
+        return payload
+    path = project / config_mod.SCHEMA_REL
+    payload["schema_path"] = config_mod.SCHEMA_REL.as_posix()
+    if not path.is_file():
+        return payload
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        payload["schema_error"] = str(e)
+        return payload
+    if not isinstance(raw, dict):
+        payload["schema_error"] = "схема должна быть JSON-объектом"
+        return payload
+    payload.update(
+        {
+            "source": "project",
+            "schema_present": True,
+            "schema_version": raw.get("version"),
+            "schema_hash": _json_hash(raw),
+            "schema": raw,
+        }
+    )
+    payload["matches_default"] = payload["schema_hash"] == default_hash
+    return payload
+
+
+def cmd_spec(args) -> int:
+    """Спецификация контракта (tickets | inbox) или машинная схема проекта."""
+    if args.which == "schema":
+        payload = _schema_spec(getattr(args, "project", None))
+    else:
+        from . import contracts
+
+        payload = contracts.load_spec(
+            "tickets-v1.json" if args.which == "tickets" else "inbox-proto-1.json"
+        )
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -412,7 +493,7 @@ def build_parser() -> argparse.ArgumentParser:
         s.set_defaults(func=fn)
         return s
 
-    add("init", "досоздать скелет/конфиг/.mcp.json (идемпотентно)", cmd_init)
+    add("init", "создать скелет в пустом каталоге или досоздать существующий (идемпотентно)", cmd_init)
 
     s = add("status", "состояние индекса", cmd_status)
     s.add_argument("--json", action="store_true")
@@ -450,8 +531,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="явный контракт (для хука: контент во временном файле)")
     s.add_argument("--json", action="store_true")
 
-    s = add("spec", "спецификация контракта (tickets | inbox) в JSON", cmd_spec)
-    s.add_argument("which", choices=["tickets", "inbox"])
+    s = add("spec", "спецификация контракта (tickets | inbox | schema) в JSON", cmd_spec)
+    s.add_argument("which", choices=["tickets", "inbox", "schema"])
+    s.add_argument("--json", action="store_true", help="JSON (по умолчанию)")
 
     add("mcp", "MCP-сервер (stdio)", cmd_mcp)
     add("watch", "авто-реиндекс (watchdog)", cmd_watch)

@@ -1,6 +1,6 @@
 [project]
 name = "vault-agents"
-version = "0.4.0"
+version = "0.5.0"
 description = "Переиспользуемое ядро памяти проекта: RAG (BM25 + эмбеддинги + RRF), MCP-доступ, temporal KG"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

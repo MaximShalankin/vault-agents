@@ -52,7 +52,7 @@ vault-agents ask "что известно про X?" --project ~/myproject
 ## Команды
 
 ```bash
-vault-agents init [--project DIR]        # досоздать скелет/конфиг/.mcp.json (идемпотентно)
+vault-agents init [--project DIR]        # создать скелет в пустом каталоге или досоздать существующий (идемпотентно)
 vault-agents status [--project DIR]      # свежесть индекса, режим, число заметок/чанков
 vault-agents doctor [--project DIR]      # проверка окружения: Ollama, модели, индексы
 vault-agents reindex [--project DIR] [--all] [--changed FILE]
@@ -61,13 +61,14 @@ vault-agents ask "вопрос"                # ответ с inline-цитат
 vault-agents lint [--project DIR]        # расширенная проверка заметок (сверх контракта схемы)
 vault-agents check FILE... [--new] [--kind ticket|inbox] [--json]
                                        # гейт контрактов tickets + inbox; exit 1 = deny
-vault-agents spec tickets|inbox        # спецификация контракта в JSON
+vault-agents spec tickets|inbox|schema # спецификация контракта или машинная схема в JSON
 vault-agents mcp                         # MCP-сервер (stdio) для Claude Code
 vault-agents watch                       # авто-реиндекс (если MCP не запущен)
 ```
 
 `--project` не обязателен: корень ищется по `vault/00_System/vault_schema.json`
-вверх от cwd (или `$VAULT_PROJECT`).
+вверх от cwd (или `$VAULT_PROJECT`). `vault-agents init` работает и на пустом
+каталоге: создаёт `vault/` сам, предварительный `mkdir -p DIR/vault` не нужен.
 
 ## Контракты `tickets` / `inbox`
 
@@ -105,6 +106,10 @@ vault-agents spec tickets                       # JSON для доски/хук�
   страницы попадает в `Chunk.page`, метаданные и выдачу (`p. N`); тип
   источника — `paper`/`run`. Дефолт `paragraph` — прежнее поведение.
   PDF-парсинг в vault-agents не входит: конвертация — на стороне проекта.
+- **Машинная схема.** `vault-agents spec schema [--project DIR]` отдаёт JSON:
+  `schema_path`, `schema_version`, `schema_hash`, `schema` проекта и
+  встроенный `default_schema` с версией и SHA-256; `matches_default`
+  сравнивает шаблон с проектом. Bootstrap'у не нужно угадывать версию.
 - **Исключение по тегам.** `exclude_tags: [trash]` — заметка не попадает в
   индекс, но остаётся доступной по прямому id (`get_note`). По умолчанию
   список пуст — поведение подключаемых проектов не меняется.
@@ -195,9 +200,10 @@ uv sync
 
 ## Статус
 
-0.4.0: RAG (hybrid), внешние коллекции `tickets`/`inbox`/`papers`/`runs`,
+0.5.0: RAG (hybrid), внешние коллекции `tickets`/`inbox`/`papers`/`runs`,
 постраничные чанки для PDF-производных документов, контракты `tickets`/
-`inbox` (`check`/`spec`), temporal KG, watcher с hot reload конфигурации,
+`inbox` (`check`/`spec`), `init` на пустом каталоге, машинная схема проекта
+(`spec schema`), temporal KG, watcher с hot reload конфигурации,
 MCP-сервер. История изменений — [CHANGELOG.md](CHANGELOG.md).
 
 ## Лицензия

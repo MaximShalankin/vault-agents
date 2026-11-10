@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0 — 2026-11-07
+
+Bootstrap-совместимость: init на пустом каталоге и машинная схема для сверки
+шаблона.
+
+### Added
+- `vault-agents spec schema [--project DIR]` — JSON: `schema_path`,
+  `schema_version`, `schema_hash`, `schema` проекта + встроенный
+  `default_schema` с версией/хешем; `matches_default` сравнивает SHA-256.
+- `vault-agents init` создаёт скелет в пустом/несуществующем каталоге, не
+  требует заранее созданного `vault/`; из подкаталога существующего проекта
+  не создаёт вложенный vault.
+
+### Docs
+- Enum и legacy-синонимы статусов tickets зафиксированы в
+  docs/contracts/README.md; `vault-agents spec tickets` отдаёт
+  `legacy.status_synonyms` как машинно-читаемую часть контракта.
+
+### Tests
+- `tests/test_init_schema.py`: init на пустом каталоге, `spec schema` для
+  default/проекта, статус `open — …` → OPEN, синонимы в `spec tickets`.
+
 ## 0.4.0 — 2026-11-02
 
 Контракты координации `tickets` + `inbox`: спецификации как данные пакета и

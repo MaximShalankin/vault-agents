@@ -40,8 +40,7 @@ def _project(args) -> Path:
 
 def _ensure_skeleton(project: Path) -> list[str]:
     """Минимальный fallback-скелет. Канонический шаблон — во внешнем scaffold'е
-    (ticket-051); сюда попадаем только на проектах, созданных
-    без него."""
+    (ticket-051); сюда попадаем только на проектах, созданных без него."""
     created: list[str] = []
     vault = project / "vault"
     for d in ("00_System", "10_Notes", "90_Archive"):
@@ -221,6 +220,14 @@ def cmd_reindex(args) -> int:
             print(json.dumps({"skipped": True, "reason": str(e)}, ensure_ascii=False))
         elif not args.quiet:
             print(f"reindex пропущен: {e}", file=sys.stderr)
+            print(
+                "  индекс принадлежит живому MCP: изменения подхватит его watcher (~2 с);",
+                file=sys.stderr,
+            )
+            print(
+                "  полный reindex (--all) — после остановки MCP-сервера; состояние: vault-agents status",
+                file=sys.stderr,
+            )
         return 1
     if args.json:
         print(json.dumps(res, ensure_ascii=False))
@@ -264,7 +271,8 @@ def cmd_search(args) -> int:
     limit = int((cfg.retrieval.get("snippet_chars") or 400))
     for i, h in enumerate(hits, start=1):
         text = h.text if args.full else snippet(h.text, args.query, limit)
-        print(f"[{i}] {h.title}  ({h.rel})  score={h.score:.4f}")
+        page = f", p. {h.page}" if h.page else ""
+        print(f"[{i}] {h.title}  ({h.rel}{page})  score={h.score:.4f}")
         print(f"    {text}")
         print()
     return 0
@@ -291,7 +299,67 @@ def cmd_ask(args) -> int:
     if show_sources:
         print("\nИсточники:")
         for i, h in enumerate(hits[:count], start=1):
-            print(f"  [{i}] {h.title} — {h.rel}")
+            page = f", p. {h.page}" if h.page else ""
+            print(f"  [{i}] {h.title} — {h.rel}{page}")
+    return 0
+
+
+# --------------------------------------------------------------- check ----
+
+def cmd_check(args) -> int:
+    """Гейт контрактов tickets + inbox (ticket-012): спеки — данные пакета,
+    вызывается и CLI, и тонкими внешними хуками. Exit 1 — deny (для хука);
+    любой другой ненулевой код хук трактует как «валидатор недоступен» —
+    фолбэк-пропуск с предупреждением, не блок."""
+    from . import contracts
+
+    reports = []
+    for f in args.files:
+        try:
+            reports.append((f, contracts.validate_file(f, new_file=args.new, kind=args.kind)))
+        except OSError as e:
+            r = contracts.Report()
+            r.problem(f"не читается: {e}")
+            reports.append((f, r))
+
+    if args.json:
+        payload = [
+            {
+                "file": str(f),
+                "kind": r.kind,
+                "valid": r.valid,
+                "status_normalized": r.status_normalized,
+                "problems": r.problems,
+                "warnings": r.warnings,
+            }
+            for f, r in reports
+        ]
+        print(json.dumps(payload, ensure_ascii=False, indent=None))
+    else:
+        for f, r in reports:
+            mark = "✓" if r.valid else "✗"
+            extra = f" [{r.status_normalized}]" if r.status_normalized else ""
+            print(f"{mark} {f}{extra}  ({r.kind})")
+            for p in r.problems:
+                print(f"    ! {p}")
+            for w in r.warnings:
+                print(f"    ? {w}")
+    bad = sum(1 for _, r in reports if not r.valid)
+    if not args.json and len(reports) > 1:
+        print(f"проверено {len(reports)} файлов, замечаний {bad}")
+    return 1 if bad else 0
+
+
+# ---------------------------------------------------------------- spec ----
+
+def cmd_spec(args) -> int:
+    """Спецификация контракта для потребителей (внешняя канбан-доска): enum,
+    синонимы, шаблоны имён — из единственного источника, без угадывания путей."""
+    from . import contracts
+
+    print(json.dumps(contracts.load_spec(
+        "tickets-v1.json" if args.which == "tickets" else "inbox-proto-1.json"
+    ), ensure_ascii=False, indent=2))
     return 0
 
 
@@ -372,6 +440,19 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
 
     add("lint", "проверка заметок по схеме", cmd_lint)
+
+    s = add("check", "гейт контрактов tickets + inbox (ticket-012)", cmd_check)
+    s.add_argument("files", nargs="+", metavar="FILE",
+                   help="файл в tickets/ или inbox/ (род каталог определяет контракт)")
+    s.add_argument("--new", action="store_true",
+                   help="создание файла: строгие гейты (enum, обязательные поля)")
+    s.add_argument("--kind", choices=["ticket", "inbox"], default="auto",
+                   help="явный контракт (для хука: контент во временном файле)")
+    s.add_argument("--json", action="store_true")
+
+    s = add("spec", "спецификация контракта (tickets | inbox) в JSON", cmd_spec)
+    s.add_argument("which", choices=["tickets", "inbox"])
+
     add("mcp", "MCP-сервер (stdio)", cmd_mcp)
     add("watch", "авто-реиндекс (watchdog)", cmd_watch)
     return p

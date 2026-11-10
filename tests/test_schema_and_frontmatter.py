@@ -1,6 +1,6 @@
 """Контракт заметок: фронтматтер и валидация по схеме.
 
-Кейсы зеркалят Go-гейт записи — Go-гейт и Python-lint обязаны
+Кейсы зеркалят внешний Go-гейт записи — Go-гейт и Python-lint обязаны
 соглашаться (ticket-051).
 """
 
@@ -81,6 +81,23 @@ def test_validate_problems(schema, rel, content, match):
     content = content if content is not None else note_text("20261003-note-hello", "T", "b")
     problems = schema_mod.validate_note(schema, rel, content)
     assert any(match in p for p in problems), problems
+
+
+def test_validate_legacy_dirs_skipped(tmp_path: Path):
+    """Легаси-секции индексируются, но контракт к ним не применяется (ticket-067)."""
+    raw = dict(SCHEMA)
+    raw["legacy_dirs"] = ["memory", ".legacy_hidden"]
+    p = tmp_path / "vault_schema.json"
+    p.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    schema = schema_mod.load(p)
+
+    # имя не по шаблону и нет фронтматтера — но это легаси-секция
+    assert schema_mod.validate_note(schema, "memory/foo-bar.md", "просто текст") == []
+    assert schema_mod.validate_note(schema, "memory/sub/foo.md", "текст") == []
+    # скрытая папка: lstrip("./") не должен съедать точку в имени
+    assert schema_mod.validate_note(schema, ".legacy_hidden/changelog.md", "текст") == []
+    # вне legacy — обычная валидация (ошибка есть)
+    assert schema_mod.validate_note(schema, "10_Notes/foo.md", "текст")
 
 
 def test_validate_enum(schema):

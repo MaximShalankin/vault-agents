@@ -142,6 +142,7 @@ class SearchHit:
     source: str = "vault"
     status: str = ""
     status_norm: str = "unknown"
+    page: int | None = None
     matched_bm25: bool = False
     similarity: float = 0.0
 
@@ -451,7 +452,13 @@ class Index:
                 # при точечном обновлении нужна sha-сверка только для цели
                 continue
             note = notes_mod.read_note(
-                path, self.cfg.project, schema, exclude_tags=exclude_tags
+                path,
+                self.cfg.project,
+                schema,
+                exclude_tags=exclude_tags,
+                chunk_size=self.cfg.chunk_size,
+                chunk_overlap=self.cfg.chunk_overlap,
+                chunk_boundary=self.cfg.chunk_boundary,
             )
             if not note.excluded:
                 current[rel] = note
@@ -538,6 +545,7 @@ class Index:
                     "source": ch.source,
                     "status": ch.status,
                     "status_norm": ch.status_norm,
+                    "page": ch.page,
                 }
 
         _warn_if_shrunk(chunks_before, len(ids))
@@ -674,8 +682,8 @@ class Index:
     ) -> list[SearchHit]:
         """Поиск по всему корпусу (vault + внешние коллекции).
 
-        source — фильтр по источнику (vault | tickets | inbox): ранжирование
-        ограничивается коллекцией и на этапе отбора кандидатов.
+        source — фильтр по источнику (vault | tickets | inbox | papers | runs):
+        ранжирование ограничивается коллекцией и на этапе отбора кандидатов.
         """
         self._ensure_loaded()
         retr = self.cfg.retrieval
@@ -757,6 +765,7 @@ class Index:
                     source=m.get("source", "vault"),
                     status=m.get("status", ""),
                     status_norm=m.get("status_norm", "unknown"),
+                    page=m.get("page"),
                     matched_bm25=cid in bm25_ids,
                     similarity=round(float(similarities.get(cid, 0.0)), 6),
                 )

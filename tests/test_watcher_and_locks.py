@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -111,6 +113,72 @@ def test_watcher_hot_reloads_include_dirs(project: Path, fake_embeddings):
     idx.reindex()
     hits = idx.search("квантование", source="tickets")
     assert hits and hits[0].rel == "tickets/ticket-001.md"
+
+
+def test_watcher_reload_retries_after_failed_load(project: Path):
+    """Битый yaml (конфиг прочитан посреди записи) не «съедает» mtime —
+    после починки тот же watcher подхватит конфиг (ticket-011)."""
+    cfg_path = project / config_mod.CONFIG_REL
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(yaml.safe_dump({"include_dirs": []}), encoding="utf-8")
+    watcher = VaultWatcher(config_mod.load_config(project))
+    watcher._restart_observer = lambda: None
+
+    cfg_path.write_text("include_dirs: [tickets\n", encoding="utf-8")  # обрыв посреди записи
+    assert watcher._reload_config() is False
+
+    cfg_path.write_text(yaml.safe_dump({"include_dirs": ["tickets"]}), encoding="utf-8")
+    assert watcher._reload_config() is True
+    assert watcher.cfg.include_dirs == ["tickets"]
+
+
+def test_watcher_reload_survives_observer_crash(project: Path, fake_embeddings):
+    """Падение _restart_observer не убивает reload: cfg/Index уже применены,
+    mtime не съеден — следующий вызов доведёт дело до конца."""
+    cfg_path = project / config_mod.CONFIG_REL
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(yaml.safe_dump({"include_dirs": []}), encoding="utf-8")
+    cfg = config_mod.load_config(project)
+    idx = Index(cfg)
+    idx.reindex()
+    watcher = VaultWatcher(cfg, index=idx)
+
+    def _boom():
+        raise OSError("observer exploded")
+
+    watcher._restart_observer = _boom
+    cfg_path.write_text(yaml.safe_dump({"include_dirs": ["tickets"]}), encoding="utf-8")
+    assert watcher._reload_config() is False
+    assert idx.cfg.include_dirs == ["tickets"]  # тулсовый reindex уже видит коллекции
+
+    watcher._restart_observer = lambda: None
+    assert watcher._reload_config() is True
+    assert watcher.cfg.include_dirs == ["tickets"]
+
+
+def test_watcher_loop_thread_survives_reload_crash(project: Path):
+    """Необработанное исключение внутри reload не убивает поток _loop."""
+    cfg_path = project / config_mod.CONFIG_REL
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(yaml.safe_dump({"include_dirs": []}), encoding="utf-8")
+    cfg = config_mod.load_config(project)
+
+    class _FakeIdx:
+        def reindex(self, **kwargs):
+            return {"notes_changed": 0, "notes_removed": 0, "chunks_total": 0}
+
+    watcher = VaultWatcher(cfg, index=_FakeIdx())
+
+    def _boom():
+        raise RuntimeError("reload exploded")
+
+    watcher._reload_config = _boom
+    t = threading.Thread(target=watcher._loop, daemon=True)
+    t.start()
+    time.sleep(1.5)  # несколько тиков с падающим reload
+    assert t.is_alive()
+    watcher.stop()
+    t.join(timeout=5)
 
 
 def test_shared_process_lock_per_index_dir(project: Path):

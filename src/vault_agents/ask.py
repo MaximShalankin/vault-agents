@@ -44,7 +44,8 @@ def build_context(hits: list[SearchHit], cfg: Config) -> str:
     limit = int((cfg.retrieval.get("snippet_chars") or 400))
     parts = []
     for i, h in enumerate(hits, start=1):
-        parts.append(f"[{i}] {h.title} ({h.rel})\n{snippet(h.text, '', limit)}")
+        page = f", p. {h.page}" if h.page else ""
+        parts.append(f"[{i}] {h.title} ({h.rel}{page})\n{snippet(h.text, '', limit)}")
     return "\n\n".join(parts)
 
 

@@ -61,7 +61,7 @@ def build_server(
 
     server = MCPServer(name="vault", version=__version__, instructions=INSTRUCTIONS)
 
-    @server.tool(description="Поиск по vault, tickets и inbox (если включены). source=vault|tickets|inbox — фильтр по коллекции. mode=snippets (по умолчанию, компактно) или full (чанк целиком).")
+    @server.tool(description="Поиск по vault, tickets, inbox, papers и runs (если включены). source=vault|tickets|inbox|papers|runs — фильтр по коллекции. mode=snippets (по умолчанию, компактно) или full (чанк целиком). Для papers в выдаче указывается страница (p. N).")
     def search(query: str, top_k: int = 8, mode: str = "snippets", source: str = "") -> str:
         hits = index.search(query, top_k=top_k, source=source or None)
         if not hits:
@@ -70,7 +70,8 @@ def build_server(
         out = []
         for i, h in enumerate(hits, start=1):
             text = h.text if mode == "full" else snippet(h.text, query, limit)
-            out.append(f"[{i}] {h.title} ({h.rel}, score {h.score:.3f})\n{text}")
+            page = f", p. {h.page}" if h.page else ""
+            out.append(f"[{i}] {h.title} ({h.rel}{page}, score {h.score:.3f})\n{text}")
         return "\n\n".join(out)
 
     @server.tool(description="Ответ на вопрос по vault, tickets и inbox с inline-цитатами [N] и источниками (локальная LLM; без неё — честный фолбэк в сниппеты).")
@@ -79,7 +80,9 @@ def build_server(
         text, used_llm = ask_mod.answer(question, hits, index.cfg)
         if used_llm and hits:
             srcs = "\n".join(
-                f"  [{i}] {h.title} — {h.rel}" for i, h in enumerate(hits, start=1)
+                f"  [{i}] {h.title} — {h.rel}"
+                + (f", p. {h.page}" if h.page else "")
+                for i, h in enumerate(hits, start=1)
             )
             return f"{text}\n\nИсточники:\n{srcs}"
         return text

@@ -56,15 +56,35 @@ vault-agents init [--project DIR]        # досоздать скелет/ко�
 vault-agents status [--project DIR]      # свежесть индекса, режим, число заметок/чанков
 vault-agents doctor [--project DIR]      # проверка окружения: Ollama, модели, индексы
 vault-agents reindex [--project DIR] [--all] [--changed FILE]
-vault-agents search "запрос" [--top-k N] [--mode hybrid|bm25|vector] [--source vault|tickets|inbox]
+vault-agents search "запрос" [--top-k N] [--mode hybrid|bm25|vector] [--source vault|tickets|inbox|papers|runs]
 vault-agents ask "вопрос"                # ответ с inline-цитатами [N]
 vault-agents lint [--project DIR]        # расширенная проверка заметок (сверх контракта схемы)
+vault-agents check FILE... [--new] [--kind ticket|inbox] [--json]
+                                       # гейт контрактов tickets + inbox; exit 1 = deny
+vault-agents spec tickets|inbox        # спецификация контракта в JSON
 vault-agents mcp                         # MCP-сервер (stdio) для Claude Code
 vault-agents watch                       # авто-реиндекс (если MCP не запущен)
 ```
 
 `--project` не обязателен: корень ищется по `vault/00_System/vault_schema.json`
 вверх от cwd (или `$VAULT_PROJECT`).
+
+## Контракты `tickets` / `inbox`
+
+Спецификации лежат в `src/vault_agents/contracts/` и являются единственным
+источником правил: имена файлов, обязательные поля шапки, enum статусов,
+legacy-синонимы и формат inbox-сообщений. Валидатор читает их и не содержит
+собственных словарей.
+
+```bash
+vault-agents check tickets/ticket-013.md        # правка: мягкий legacy
+vault-agents check --new tickets/ticket-013.md  # создание: строгие гейты
+vault-agents spec tickets                       # JSON для доски/хуков
+```
+
+`check` возвращает exit 1 только на deny; остальные ненулевые коды означают,
+что валидатор недоступен, и вызывающая сторона может пропустить запись с
+предупреждением.
 
 ## Как это работает
 
@@ -79,6 +99,12 @@ vault-agents watch                       # авто-реиндекс (если M
   `inbox`), тип — из расположения, заголовок — из первого `# …`, статус — из
   `**Status:**` (legacy-тикеты без фронтматтера). Архив и `readme.md` не
   индексируются (`include_skip_names` / `include_skip_dirs`).
+- **PDF-производные коллекции.** `papers/` и `runs/` — те же внешние
+  коллекции; markdown из PDF может содержать якоря `<!-- page: N -->`.
+  При `chunk_boundary: page` чанк не пересекает границу страницы, номер
+  страницы попадает в `Chunk.page`, метаданные и выдачу (`p. N`); тип
+  источника — `paper`/`run`. Дефолт `paragraph` — прежнее поведение.
+  PDF-парсинг в vault-agents не входит: конвертация — на стороне проекта.
 - **Исключение по тегам.** `exclude_tags: [trash]` — заметка не попадает в
   индекс, но остаётся доступной по прямому id (`get_note`). По умолчанию
   список пуст — поведение подключаемых проектов не меняется.
@@ -114,11 +140,15 @@ vault-agents watch                       # авто-реиндекс (если M
 `src/vault_agents/config.py`. Ключевое: `include_dirs` (внешние коллекции),
 `exclude_tags` (например, `[trash]`), `include_skip_names`/`include_skip_dirs`
 (по умолчанию `readme.md` / `archive`), `embedding.model` (bge-m3:latest),
-`bm25.backend`, `retrieval.mode/weights`, `ask.model`, `watcher.*`.
+`chunk_boundary` (`paragraph` | `page`), `bm25.backend`,
+`retrieval.mode/weights`, `ask.model`, `watcher.*`.
 
 ```yaml
 include_dirs: [tickets, inbox]
 exclude_tags: [trash]
+# PDF-производные документы:
+# include_dirs: [papers]
+# chunk_boundary: page   # чанки по якорям <!-- page: N -->, p. N в выдаче
 ```
 
 Качество выдачи настраивается опционально:
@@ -148,6 +178,7 @@ src/vault_agents/
   config.py        # конфиг + поиск корня проекта
   frontmatter.py   # минимальный YAML-поднабор
   schema.py        # vault_schema.json + валидация заметки
+  contracts/       # tickets-v1.json, inbox-proto-1.json + валидатор
   notes.py         # заметки vault + внешние коллекции, теги, чанки, sha256
   rag/             # embeddings, bm25, chroma, hybrid(RRF), index
   kg/              # temporal sqlite
@@ -164,9 +195,10 @@ uv sync
 
 ## Статус
 
-0.3.2: RAG (hybrid), внешние коллекции `tickets`/`inbox`, temporal KG,
-watcher с hot reload конфигурации, MCP-сервер. История изменений —
-[CHANGELOG.md](CHANGELOG.md).
+0.4.0: RAG (hybrid), внешние коллекции `tickets`/`inbox`/`papers`/`runs`,
+постраничные чанки для PDF-производных документов, контракты `tickets`/
+`inbox` (`check`/`spec`), temporal KG, watcher с hot reload конфигурации,
+MCP-сервер. История изменений — [CHANGELOG.md](CHANGELOG.md).
 
 ## Лицензия
 

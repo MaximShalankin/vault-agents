@@ -75,12 +75,20 @@ class VaultWatcher:
         self.schema = schema_mod.load(cfg.schema_path) if cfg.schema_path.is_file() else None
         self._cfg_path = cfg.project / CONFIG_REL
         self._cfg_mtime = self._mtime()
+        self._cfg_fail_mtime: int | None = None
 
     def _mtime(self) -> int:
         try:
             return self._cfg_path.stat().st_mtime_ns
         except OSError:
             return 0
+
+    def _fail(self, mtime: int, msg: str) -> None:
+        """Лог сбоя reload — один раз на каждое изменение конфига (ретрай молча)."""
+        if mtime == self._cfg_fail_mtime:
+            return
+        self._cfg_fail_mtime = mtime
+        print(f"[watch] {msg}", file=sys.stderr, flush=True)
 
     def _reload_config(self) -> bool:
         """Подхватить изменения vault.config.yaml без рестарта MCP.
@@ -90,23 +98,37 @@ class VaultWatcher:
         изменении конфига пересоздаём observer (могли появиться/исчезнуть
         внешние каталоги) и просим Index перечитать cfg; последующий
         reindex в _loop индексирует новые коллекции.
+
+        mtime съедаем только после успешного применения: временный сбой
+        (недописанный yaml, падение observer) не отключает reload —
+        следующий тик повторит попытку (ticket-011).
         """
         mtime = self._mtime()
         if mtime == self._cfg_mtime:
             return False
-        self._cfg_mtime = mtime
         try:
             new_cfg = load_config(self.cfg.project)
+            new_schema = (
+                schema_mod.load(new_cfg.schema_path) if new_cfg.schema_path.is_file() else None
+            )
         except Exception as e:  # noqa: BLE001 — watcher не должен умирать
-            print(f"[watch] config reload failed: {e}", file=sys.stderr, flush=True)
+            self._fail(mtime, f"config reload failed: {e}")
             return False
         self.cfg = new_cfg
         self.vault = new_cfg.project / "vault"
         self.debounce = float(new_cfg.watcher.get("debounce_sec", 2))
-        self.schema = schema_mod.load(new_cfg.schema_path) if new_cfg.schema_path.is_file() else None
+        self.schema = new_schema
         if self._index is not None:
             self._index.update_config(new_cfg)
-        self._restart_observer()
+        try:
+            self._restart_observer()
+        except Exception as e:  # noqa: BLE001
+            # cfg/Index уже применены — тулсовый reindex видит новые
+            # коллекции; watcher повторит рестарт observer'а на тике
+            self._fail(mtime, f"observer restart failed: {e}")
+            return False
+        self._cfg_mtime = mtime
+        self._cfg_fail_mtime = None
         print(
             f"[watch] config reloaded: include_dirs={new_cfg.include_dirs}",
             file=sys.stderr,
@@ -172,7 +194,12 @@ class VaultWatcher:
         self._catch_up(idx)
         while not self._stop.is_set():
             time.sleep(POLL)
-            if self._reload_config():
+            try:
+                reloaded = self._reload_config()
+            except Exception as e:  # noqa: BLE001 — поток не должен умирать
+                print(f"[watch] config reload failed: {e}", file=sys.stderr, flush=True)
+                reloaded = False
+            if reloaded:
                 try:
                     res = idx.reindex()
                     print(

@@ -29,6 +29,9 @@ DEFAULTS: dict[str, Any] = {
     "include_skip_dirs": ["archive"],     # подкаталоги, не индексируемые во внешних dirs
     "chunk_size": 1200,          # символов на чанк
     "chunk_overlap": 150,
+    # paragraph — обычное чанкование; page — чанк не пересекает якорь
+    # <!-- page: N --> (PDF-производные документы, ticket-009).
+    "chunk_boundary": "paragraph",
     "embedding": {
         "provider": "ollama",
         "model": "bge-m3:latest",
@@ -147,6 +150,11 @@ class Config:
     @property
     def chunk_overlap(self) -> int:
         return int(self.get("chunk_overlap", default=DEFAULTS["chunk_overlap"]))
+
+    @property
+    def chunk_boundary(self) -> str:
+        v = str(self.get("chunk_boundary", default=DEFAULTS["chunk_boundary"])).strip().lower()
+        return v if v in ("paragraph", "page") else "paragraph"
 
     @property
     def retrieval(self) -> dict[str, Any]:

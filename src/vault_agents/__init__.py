@@ -4,4 +4,4 @@ RAG (BM25 + эмбеддинги + RRF), MCP-доступ, temporal KG. Прое
 vault/ проекта; канонический контракт заметок — vault/00_System/vault_schema.json.
 """
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"

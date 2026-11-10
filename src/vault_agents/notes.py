@@ -17,7 +17,10 @@ from typing import Iterator
 from . import frontmatter, schema as schema_mod
 
 # Внешние коллекции: тип по расположению, если фронтматтера нет.
-SOURCE_TYPES = {"tickets": "ticket", "inbox": "inbox"}
+SOURCE_TYPES = {"tickets": "ticket", "inbox": "inbox", "papers": "paper", "runs": "run"}
+
+# Якорь страницы в PDF-производном markdown (ticket-009).
+PAGE_RE = re.compile(r"^\s*<!--\s*page:\s*(\d+)\s*-->\s*$", re.MULTILINE | re.IGNORECASE)
 
 _STATUS_RE = re.compile(
     r"^\s*(?:\*\*(?:Status|Статус):\*\*|(?:Status|Статус):)\s*(.+)$",
@@ -68,6 +71,7 @@ class Chunk:
     source: str = "vault"  # vault | tickets | inbox | <первый сегмент include_dirs>
     status: str = ""
     status_norm: str = "unknown"
+    page: int | None = None  # номер страницы для PDF-производных источников
 
 
 @dataclass
@@ -212,6 +216,9 @@ def read_note(
     *,
     exclude_tags: set[str] | None = None,
     build_chunks: bool = True,
+    chunk_size: int = 1200,
+    chunk_overlap: int = 150,
+    chunk_boundary: str = "paragraph",
 ) -> Note:
     """Заметка + чанки. Битый фронтматтер не роняет индексацию: заметка
     попадает в индекс с тем, что есть (гейт записи — отдельный внешний инструмент).
@@ -248,6 +255,14 @@ def read_note(
 
     chunks: list[Chunk] = []
     if not excluded and build_chunks:
+        pieces: list[tuple[int | None, str]]
+        if chunk_boundary == "page":
+            pieces = chunk_text_pages(body, size=chunk_size, overlap=chunk_overlap)
+        else:
+            pieces = [
+                (None, c)
+                for c in chunk_text(body, size=chunk_size, overlap=chunk_overlap)
+            ]
         chunks = [
             Chunk(
                 id=f"{rel}#{i}",
@@ -259,8 +274,9 @@ def read_note(
                 source=source,
                 status=status,
                 status_norm=status_norm,
+                page=page,
             )
-            for i, c in enumerate(chunk_text(body))
+            for i, (page, c) in enumerate(pieces)
         ]
     return Note(
         rel=rel,
@@ -307,3 +323,42 @@ def chunk_text(text: str, size: int = 1200, overlap: int = 150) -> list[str]:
     if buf:
         chunks.append(buf)
     return chunks
+
+
+def split_pages(text: str) -> list[tuple[int | None, str]]:
+    """Разбить текст по якорям `<!-- page: N -->` на сегменты (page, text).
+
+    Текст до первого якоря — (None, …). Пустые сегменты пропускаются.
+    Без якорей — один сегмент (None, text): режим page эквивалентен
+    обычному чанкованию.
+    """
+    matches = list(PAGE_RE.finditer(text))
+    if not matches:
+        return [(None, text)]
+    out: list[tuple[int | None, str]] = []
+    # текст до первого якоря — обычно заголовок/шапка первой страницы,
+    # приклеиваем его к первой странице, чтобы не терять контекст
+    pre = text[: matches[0].start()].strip()
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[m.end() : end].strip()
+        if i == 0 and pre:
+            body = f"{pre}\n\n{body}" if body else pre
+        if body:
+            out.append((int(m.group(1)), body))
+    return out
+
+
+def chunk_text_pages(
+    text: str, size: int = 1200, overlap: int = 150
+) -> list[tuple[int | None, str]]:
+    """Чанкование с запретом пересекать границу страницы (ticket-009).
+
+    Каждый сегмент страницы чанкуется отдельно; возвращаются пары
+    (page, chunk). Для текста без якорей поведение совпадает с chunk_text.
+    """
+    out: list[tuple[int | None, str]] = []
+    for page, body in split_pages(text):
+        for c in chunk_text(body, size=size, overlap=overlap):
+            out.append((page, c))
+    return out

@@ -39,6 +39,9 @@ class Schema:
     naming: str = DEFAULT_NAMING
     created_format: str = "YYYY-MM-DD"
     skip_dirs: list[str] = field(default_factory=lambda: ["00_System", "90_Archive"])
+    # Легаси-секции: индексируются, но не валидируются.
+    # Путь относительно vault/; совпадение по префиксу каталога.
+    legacy_dirs: list[str] = field(default_factory=list)
     state: dict = field(default_factory=dict)
 
     @property
@@ -72,9 +75,22 @@ def load(path: str | Path) -> Schema:
         naming=raw.get("naming") or DEFAULT_NAMING,
         created_format=raw.get("created_format") or "YYYY-MM-DD",
         skip_dirs=list(raw.get("skip_dirs") or ["00_System", "90_Archive"]),
+        legacy_dirs=[str(d).strip().strip("/") for d in (raw.get("legacy_dirs") or []) if str(d).strip()],
         state=dict(raw.get("state") or {}),
         path=str(p),
     )
+
+
+def legacy_rel(schema: Schema, rel: str) -> bool:
+    """Заметка лежит в легаси-секции: индексируется, но не валидируется."""
+    rel = rel.replace("\\", "/")
+    if rel.startswith("./"):
+        rel = rel[2:]
+    rel = rel.lstrip("/")
+    for d in schema.legacy_dirs:
+        if rel == d or rel.startswith(d + "/"):
+            return True
+    return False
 
 
 def skip_rel(schema: Schema, rel: str) -> bool:
@@ -117,6 +133,8 @@ def validate_note(schema: Schema, rel: str, content: str) -> list[str]:
     Набор и порядок — как в vault.go:
     имя → папка типа → фронтматтер → id/type/created → status → required → enums.
     """
+    if legacy_rel(schema, rel):
+        return []  # легаси-секция: контракт не применяется
     problems: list[str] = []
     base = Path(rel).name
     stem = base[: -len(Path(base).suffix)] if Path(base).suffix else base
